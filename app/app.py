@@ -3,7 +3,7 @@ import os
 import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-
+#dev ya 3am
 def get_runtime_metadata():
     return {
         "environment": os.getenv("APP_ENV", "local"),
