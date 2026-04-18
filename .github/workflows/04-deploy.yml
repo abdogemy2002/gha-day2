@@ -1,13 +1,11 @@
-# This workflow completes the story by delivering the saved package.
-# It starts after the build workflow finishes successfully.
 name: 04 Deploy Workflow
 
 on:
-  workflow_run:
-    # Listen for the build workflow by name.
-    workflows: ["02 CI Workflow"]
-    # Start when the build workflow has completed.
-    types: [completed]
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
 
 env:
   IMAGE_NAME: tiny-health-app
@@ -17,72 +15,92 @@ env:
   APP_PORT: "8000"
 
 permissions:
-  # Read access is enough because this workflow only downloads artifacts and reads repo data.
   actions: read
   contents: read
 
 jobs:
   deploy-package:
-    # Continue only when the build workflow succeeded.
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    # Use a fresh runner for the deployment simulation.
+    # Only run when the PR was actually merged, not just closed.
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download build artifact
-        # Download the exact artifact produced by the build run.
+      - name: Find CI workflow run ID for this PR's head commit
+        id: find-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          REPO="${{ github.repository }}"
+
+          # Poll the API until we find a successful CI run for the exact commit that was merged.
+          for attempt in $(seq 1 10); do
+            RUN_ID=$(gh api \
+              "repos/${REPO}/actions/workflows/02-ci.yml/runs?head_sha=${HEAD_SHA}&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id // empty')
+
+            if [ -n "$RUN_ID" ]; then
+              echo "Found CI run: $RUN_ID"
+              echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Attempt $attempt: CI run not found yet, retrying in 10s..."
+            sleep 10
+          done
+
+          echo "No successful CI run found for commit ${HEAD_SHA}"
+          exit 1
+
+      - name: Download build artifact from CI run
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.find-run.outputs.run_id }}
           path: downloaded-artifact
 
       - name: Show downloaded files
-        # Quick visibility step so students can see what arrived from the build.
         run: ls -R downloaded-artifact
 
       - name: Load Docker image
-        # Turn the saved artifact file back into a Docker image.
         run: docker load --input "downloaded-artifact/${IMAGE_TAR}"
 
-      - name: Recreate image tag from build run
-        # Rebuild the same date-plus-run-id tag the build workflow created.
+      - name: Recreate image tag from CI run
         id: image-tag
         run: |
-          BUILD_DATE="$(echo "${{ github.event.workflow_run.created_at }}" | cut -dT -f1)"
-          IMAGE_TAG="${BUILD_DATE}-${{ github.event.workflow_run.id }}"
+          # Fetch the CI run's created_at timestamp to rebuild the same tag.
+          BUILD_DATE=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${{ steps.find-run.outputs.run_id }}" \
+            --jq '.created_at | split("T")[0]')
+          IMAGE_TAG="${BUILD_DATE}-${{ steps.find-run.outputs.run_id }}"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Start container
-        # Start the exact same tagged image that the build workflow created.
         run: |
           docker run -d \
             --name "${CONTAINER_NAME}" \
             -p "${APP_PORT}:8000" \
             "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}"
 
-      - name : container check 
-        run : docker ps  
-
+      - name: Container check
+        run: docker ps
 
       - name: Smoke test deployed app
-        # Retry a few times because app startup can take a moment.
         run: |
           for attempt in 1 2 3 4 5; do
             if curl --fail --silent "http://127.0.0.1:${APP_PORT}/health"; then
-             echo $(curl  "http://127.0.0.1:${APP_PORT}/health")
-             exit 0
+              echo $(curl "http://127.0.0.1:${APP_PORT}/health")
+              exit 0
             fi
             sleep 2
           done
-          echo $(curl  "http://127.0.0.1:${APP_PORT}/health")
+          echo $(curl "http://127.0.0.1:${APP_PORT}/health")
           exit 1
 
-          
       - name: Stop container
         if: always()
-        # Clean up even if an earlier step fails.
         run: docker rm -f "${CONTAINER_NAME}" || true
-      
