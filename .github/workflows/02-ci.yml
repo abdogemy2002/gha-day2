@@ -3,17 +3,18 @@
 name: 02 CI Workflow
 
 on:
-  # Run automatically when app code, tests, or this workflow file changes.
-  push:
-    paths:
-      - "app/**"
-      - "tests/**"
-      - ".github/workflows/02-ci.yml"
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize  # This covers "updated" (new commits pushed)
+      - reopened
   # Allow a safe manual run before students trigger it with a code change.
   workflow_dispatch:
 
 jobs:
-  run-tests:
+  verify:
     # The runner is the temporary machine that executes the steps below.
     runs-on: ubuntu-latest
 
@@ -31,3 +32,55 @@ jobs:
       - name: Run tests
         # This is the key verification step in the CI workflow.
         run: python -m unittest discover -s tests -v
+      
+
+  build-package:
+    # Use a fresh GitHub-hosted runner for the build.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        # Get the repository files onto the runner.
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        # Prepare Python so the workflow can run the tests first.
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        # Build only after the verification step passes.
+        run: python -m unittest discover -s tests -v
+
+      - name: Set image tag
+        # Use today's UTC date plus the GitHub run ID.
+        # This keeps the tag easy to explain and still unique for the run.
+        id: image-tag
+        run: |
+          TODAY="$(date -u +%Y-%m-%d)"
+          IMAGE_TAG="${TODAY}-${GITHUB_RUN_ID}"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image with docker build
+        # Create the packaged application image with one traceable tag.
+        # The deploy workflow will run this exact same tag later.
+        run: |
+          docker build \
+            -t "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" \
+            .
+
+      - name: Save Docker image as artifact file
+        # Convert that exact tagged image into a file that can be reused later.
+        run: docker save "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" -o "${IMAGE_TAR}"
+
+      - name: Upload build artifact
+        # Store the packaged output so a later workflow can use the exact same package.
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.IMAGE_TAR }}
+          retention-days: 7
+
+      - name: sleep for some time  
+        run: sleep 120
