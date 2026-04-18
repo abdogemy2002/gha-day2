@@ -4,7 +4,6 @@ on:
   workflow_run:
     workflows: ["02 CI Workflow"]
     types: [completed]
-    # Only fire when CI ran on main — which only happens after a PR is merged.
     branches: [main]
 
 env:
@@ -20,8 +19,10 @@ permissions:
 
 jobs:
   deploy-package:
-    # Guard against CI failures — only deploy green builds.
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # 'push' means CI was triggered by a merge into main, not a PR open/sync.
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
 
     steps:
