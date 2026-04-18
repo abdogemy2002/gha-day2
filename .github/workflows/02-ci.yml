@@ -53,6 +53,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+          
     
       - name: Build Docker image
         run: |
@@ -74,9 +75,5 @@ jobs:
       - name: Push image to ECR
         run: |
           docker push "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
-
-      - name: sleep for some time
-        run: sleep 60
-
 
         
