@@ -63,20 +63,26 @@ jobs:
             -p "${APP_PORT}:8000" \
             "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}"
 
+      - name : container check 
+        run : docker ps  
+
+
       - name: Smoke test deployed app
         # Retry a few times because app startup can take a moment.
         run: |
           for attempt in 1 2 3 4 5; do
             if curl --fail --silent "http://127.0.0.1:${APP_PORT}/health"; then
-              exit 0
+             echo $(curl  "http://127.0.0.1:${APP_PORT}/health")
+             exit 0
             fi
-            echo "Waiting for app to become ready..."
             sleep 2
           done
-          echo "App did not become ready in time."
+          echo $(curl  "http://127.0.0.1:${APP_PORT}/health")
           exit 1
 
+          
       - name: Stop container
         if: always()
         # Clean up even if an earlier step fails.
         run: docker rm -f "${CONTAINER_NAME}" || true
+      
