@@ -1,10 +1,11 @@
 name: 04 Deploy Workflow
 
 on:
-  workflow_run:
-    workflows: ["02 CI Workflow"]
-    types: [completed]
-    branches: [main]
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
 
 env:
   IMAGE_NAME: tiny-health-app
@@ -19,20 +20,45 @@ permissions:
 
 jobs:
   deploy-package:
-    # 'push' means CI was triggered by a merge into main, not a PR open/sync.
-    if: |
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push'
+    # Only run when the PR was actually merged, not just closed.
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download build artifact
+      - name: Find CI workflow run ID for this PR's head commit
+        id: find-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          REPO="${{ github.repository }}"
+
+          # Poll the API until we find a successful CI run for the exact commit that was merged.
+          for attempt in $(seq 1 10); do
+            RUN_ID=$(gh api \
+              "repos/${REPO}/actions/workflows/02-ci.yml/runs?head_sha=${HEAD_SHA}&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id // empty')
+
+            if [ -n "$RUN_ID" ]; then
+              echo "Found CI run: $RUN_ID"
+              echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Attempt $attempt: CI run not found yet, retrying in 10s..."
+            sleep 10
+          done
+
+          echo "No successful CI run found for commit ${HEAD_SHA}"
+          exit 1
+
+      - name: Download build artifact from CI run
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.find-run.outputs.run_id }}
           path: downloaded-artifact
 
       - name: Show downloaded files
@@ -41,12 +67,17 @@ jobs:
       - name: Load Docker image
         run: docker load --input "downloaded-artifact/${IMAGE_TAR}"
 
-      - name: Recreate image tag from build run
+      - name: Recreate image tag from CI run
         id: image-tag
         run: |
-          BUILD_DATE="$(echo "${{ github.event.workflow_run.created_at }}" | cut -dT -f1)"
-          IMAGE_TAG="${BUILD_DATE}-${{ github.event.workflow_run.id }}"
+          # Fetch the CI run's created_at timestamp to rebuild the same tag.
+          BUILD_DATE=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${{ steps.find-run.outputs.run_id }}" \
+            --jq '.created_at | split("T")[0]')
+          IMAGE_TAG="${BUILD_DATE}-${{ steps.find-run.outputs.run_id }}"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Start container
         run: |

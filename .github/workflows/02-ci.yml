@@ -89,4 +89,4 @@ jobs:
           retention-days: 7
 
       - name: sleep for some time  
-        run: sleep 120
+        run: sleep 60
