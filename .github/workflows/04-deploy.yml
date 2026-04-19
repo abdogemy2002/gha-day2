@@ -36,7 +36,7 @@ jobs:
 
       - name: Write SSH key to file
         run: |
-          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
+          echo "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
           chmod 600 ec2_key.pem
 
       - name: Deploy to EC2
