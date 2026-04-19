@@ -1,7 +1,6 @@
 name: 04 Deploy Workflow
 
 on:
-  workflow_dispatch: 
   pull_request:
     branches:
       - main
@@ -35,14 +34,14 @@ jobs:
           aws ecr get-login-password --region us-east-1 | \
           docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-      - name: Load SSH key into agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+      - name: Write SSH key to file
+        run: |
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
+          chmod 600 ec2_key.pem
 
       - name: Deploy to EC2
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} << EOF
+          ssh -o StrictHostKeyChecking=no -i ec2_key.pem ubuntu@${{ secrets.EC2_HOST }} << EOF
             aws ecr get-login-password --region us-east-1 | \
               docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
@@ -56,6 +55,10 @@ jobs:
               -p "${APP_PORT}:8000" \
               "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
           EOF
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ec2_key.pem
 
       - name: Smoke test deployed app
         run: |
