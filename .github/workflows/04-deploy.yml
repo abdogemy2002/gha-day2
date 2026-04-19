@@ -32,34 +32,31 @@ jobs:
 
      
       - name: Write SSH key to file
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
-          echo "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
+          printf '%s\n' "$EC2_SSH_KEY" > ec2_key.pem
           chmod 600 ec2_key.pem
-
-      - name: login to ecr from runner 
-        id: ecr
-        run : |
-          echo "PASSWORD=$(aws ecr get-login-password --region us-east-1 )" >> $GITHUB_OUTPUT
-        
-
 
       - name: Deploy to EC2
         run: |
+          ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
+
           ssh -o StrictHostKeyChecking=no -i ec2_key.pem ubuntu@${{ secrets.EC2_HOST }} << EOF
-            "echo '${{ steps.ecr.outputs.PASSWORD }}'  | \
-              docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-            docker pull "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
+            docker pull "${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-            docker rm -f ${CONTAINER_NAME} || true
+            docker rm -f ${{ env.CONTAINER_NAME }} || true
 
             docker run -d \
-              --name "${CONTAINER_NAME}" \
+              --name "${{ env.CONTAINER_NAME }}" \
               --restart unless-stopped \
-              -p "${APP_PORT}:8000" \
-              "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
+              -p "${{ env.APP_PORT }}:8000" \
+              "${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           EOF
 
+          
       - name: Cleanup SSH key
         if: always()
         run: rm -f ec2_key.pem
