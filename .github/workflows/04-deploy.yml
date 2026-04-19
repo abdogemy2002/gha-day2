@@ -1,6 +1,7 @@
 name: 04 Deploy Workflow
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -22,81 +23,52 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Find CI workflow run ID for this PR's head commit
-        id: find-run
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.ACCESS_KEYID}}
+          aws-secret-access-key: ${{ secrets.SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Log in to ECR
         run: |
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          REPO="${{ github.repository }}"
+          aws ecr get-login-password --region us-east-1 | \
+          docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-          for attempt in $(seq 1 10); do
-            RUN_ID=$(gh api \
-              "repos/${REPO}/actions/workflows/02-ci.yml/runs?head_sha=${HEAD_SHA}&status=success&per_page=1" \
-              --jq '.workflow_runs[0].id // empty')
-
-            if [ -n "$RUN_ID" ]; then
-              echo "Found CI run: $RUN_ID"
-              echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            echo "Attempt $attempt: CI run not found yet, retrying in 10s..."
-            sleep 10
-          done
-
-          echo "No successful CI run found for commit ${HEAD_SHA}"
-          exit 1
-
-      - name: Reconstruct image tag from CI run
-        id: image-tag
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Write SSH key to file
         run: |
-          BUILD_DATE=$(gh api \
-            "repos/${{ github.repository }}/actions/runs/${{ steps.find-run.outputs.run_id }}" \
-            --jq '.created_at | split("T")[0]')
-          IMAGE_TAG="${BUILD_DATE}-${{ steps.find-run.outputs.run_id }}"
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy to EC2
-        env:
-          IMAGE_TAG: ${{ steps.image-tag.outputs.image_tag }}
-        run: |
-          # Write the SSH key to a temp file
           echo "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
           chmod 600 ec2_key.pem
 
+      - name: Deploy to EC2
+        run: |
           ssh -o StrictHostKeyChecking=no -i ec2_key.pem ubuntu@${{ secrets.EC2_HOST }} << EOF
-            # Log in to ECR from the EC2 instance
-            # EC2 uses its IAM role — no access keys needed here
             aws ecr get-login-password --region us-east-1 | \
               docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-            # Pull the exact image that was built and scanned in CI
-            docker pull "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:${IMAGE_TAG}"
+            docker pull "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
 
-            # Stop and remove any previously running container
             docker rm -f ${CONTAINER_NAME} || true
 
-            # Start the new container
             docker run -d \
-              --name ${CONTAINER_NAME} \
+              --name "${CONTAINER_NAME}" \
               --restart unless-stopped \
-              -p ${APP_PORT}:8000 \
-              "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:${IMAGE_TAG}"
+              -p "${APP_PORT}:8000" \
+              "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
           EOF
 
-          rm -f ec2_key.pem
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ec2_key.pem
 
       - name: Smoke test deployed app
         run: |
           for attempt in 1 2 3 4 5; do
             if curl --fail --silent "http://${{ secrets.EC2_HOST }}:${APP_PORT}/health"; then
-              echo "App is healthy"
+              echo $(curl "http://${{ secrets.EC2_HOST }}:${APP_PORT}/health")
               exit 0
             fi
-            sleep 5
+            sleep 2
           done
-          echo "Smoke test failed"
+          echo $(curl "http://${{ secrets.EC2_HOST }}:${APP_PORT}/health")
           exit 1
