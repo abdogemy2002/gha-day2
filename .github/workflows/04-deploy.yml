@@ -49,15 +49,15 @@ jobs:
             "echo '${{ steps.ecr.outputs.PASSWORD }}'  | \
               docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-            docker pull "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
+            docker pull '${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest'
 
             docker rm -f ${CONTAINER_NAME} || true
 
             docker run -d \
-              --name "${CONTAINER_NAME}" \
+              --name '${CONTAINER_NAME}' \
               --restart unless-stopped \
-              -p "${APP_PORT}:8000" \
-              "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
+              -p '${APP_PORT}:8000' \
+              '${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest'
           EOF
 
       - name: Cleanup SSH key
