@@ -30,20 +30,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Log in to ECR
-        run: |
-          aws ecr get-login-password --region us-east-1 | \
-          docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
-
+     
       - name: Write SSH key to file
         run: |
           echo "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
           chmod 600 ec2_key.pem
 
+      - name: login to ecr from runner 
+        id: ecr
+        run : |
+          echo "PASSWORD=$(aws ecr get-login-password --region us-east-1 )" >> $GITHUB_OUTPUT
+        
+
+
       - name: Deploy to EC2
         run: |
           ssh -o StrictHostKeyChecking=no -i ec2_key.pem ubuntu@${{ secrets.EC2_HOST }} << EOF
-            aws ecr get-login-password --region us-east-1 | \
+            "echo '${{ steps.ecr.outputs.PASSWORD }}'  | \
               docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
             docker pull "${{ secrets.ECR_REGISTRY }}/${IMAGE_NAME}:latest"
